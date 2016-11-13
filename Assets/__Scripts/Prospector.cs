@@ -1,12 +1,31 @@
 ﻿using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 
+public enum ScoreEvent
+{
+    draw,
+    mine,
+    mineGold,
+    gameWin,
+    gameLoss
+}
 
 public class Prospector : MonoBehaviour {
 
 	static public Prospector 	S;
-	public Deck					deck;
+    static public int SCORE_FROM_PREV_ROUND = 0;
+    static public int HIGH_SCORE = 0;
+
+    public float reloadDelay = 1f;
+
+    public Vector3 fsPosMid = new Vector3(0.5f, 0.90f, 0);
+    public Vector3 fsPosRun = new Vector3(0.5f, 0.75f, 0);
+    public Vector3 fsPosMid2 = new Vector3(0.5f, 0.5f, 0);
+    public Vector3 fsPosEnd = new Vector3(1.0f, 0.65f, 0);
+
+    public Deck					deck;
 	public TextAsset			deckXML;
 
     public Layout layout;
@@ -20,13 +39,50 @@ public class Prospector : MonoBehaviour {
     public List<CardProspector> tableau;
     public List<CardProspector> discardPile;
 
+    public int chain = 0;
+    public int scoreRun = 0;
+    public int score = 0;
+    public FloatingScore fsRun;
+
+    public GUIText GTGameOver;
+    public GUIText GTRoundResult;
+
 	void Awake(){
 		S = this;
+        if (PlayerPrefs.HasKey("ProspectoreHighScore"))
+        {
+            HIGH_SCORE = PlayerPrefs.GetInt("ProspectorHighScore");
+        }
+        score += SCORE_FROM_PREV_ROUND;
+        SCORE_FROM_PREV_ROUND = 0;
+
+        GameObject go = GameObject.Find("GameOver");
+        if (go != null)
+        {
+            GTGameOver = go.GetComponent<GUIText>();
+        }
+        go = GameObject.Find("RoundResult");
+        if(go != null)
+        {
+            GTRoundResult = go.GetComponent<GUIText>();
+        }
+        ShowResultGTs(false);
+        go = GameObject.Find("HighScore");
+        string hScore = "High Score: " + Utils.AddCommasToNumber(HIGH_SCORE);
+        go.GetComponent<GUIText>().text = hScore;
+
 	}
+
+    void ShowResultGTs(bool show)
+    {
+        GTGameOver.gameObject.SetActive(show);
+        GTRoundResult.gameObject.SetActive(show);
+    }
 
     public List<CardProspector> drawPile;
 
 	void Start() {
+        ScoreBoard.S.score = score;
 		deck = GetComponent<Deck> ();
 		deck.InitDeck (deckXML.text);
 		Deck.Shuffle (ref deck.cards);
@@ -122,6 +178,7 @@ public class Prospector : MonoBehaviour {
                 MoveToDiscard(target);
                 MoveToTarget(Draw());
                 UpdateDrawPile();
+                ScoreManager(ScoreEvent.draw);
                 break;
 
             case CardState.tableau:
@@ -138,8 +195,10 @@ public class Prospector : MonoBehaviour {
                 tableau.Remove(cd);
                 MoveToTarget(cd);
                 SetTableauFaces();
+                ScoreManager(ScoreEvent.mine);
                 break;
         }
+        CheckForGameOver();
     }
 
     void MoveToDiscard(CardProspector cd)
@@ -220,6 +279,123 @@ public class Prospector : MonoBehaviour {
                 }
             }
             cd.faceUp = fup;
+        }
+    }
+
+    void CheckForGameOver()
+    {
+        if(tableau.Count == 0)
+        {
+            GameOver(true);
+            return;
+        }
+        if (drawPile.Count > 0)
+        {
+            return;
+        }
+        foreach(CardProspector cd in tableau)
+        {
+            if(AdjacentRank(cd, target)){
+                return;
+            }
+        }
+        GameOver(false);
+    }
+
+    void GameOver(bool won)
+    {
+        if (won) {
+            ScoreManager(ScoreEvent.gameWin);
+            //print("Game Over. You won! :)");
+        }
+        else
+        {
+            ScoreManager(ScoreEvent.gameLoss);
+            //print("Game Over. You Lost. :(");
+        }
+        Invoke("ReloadLevel", reloadDelay);
+        //SceneManager.LoadScene("__Prospector_Scene_0");
+    }
+
+    void ReloadLevel()
+    {
+        SceneManager.LoadScene("__Prospector_Scene_0");
+    }
+
+    void ScoreManager(ScoreEvent sEvt)
+    {
+        List<Vector3> fsPts;
+        switch (sEvt)
+        {
+            case ScoreEvent.draw:
+            case ScoreEvent.gameWin:
+            case ScoreEvent.gameLoss:
+                chain = 0;
+                score += scoreRun;
+                scoreRun = 0;
+                if(fsRun != null)
+                {
+                    fsPts = new List<Vector3>();
+                    fsPts.Add(fsPosRun);
+                    fsPts.Add(fsPosMid2);
+                    fsPts.Add(fsPosEnd);
+                    fsRun.reportFinishTo = ScoreBoard.S.gameObject;
+                    fsRun.Init(fsPts, 0, 1);
+                    fsRun.fontSizes = new List<float>(new float[] { 28, 36, 4 });
+                    fsRun = null;
+                }
+                break;
+            case ScoreEvent.mine:
+                chain++;
+                scoreRun += chain;
+                FloatingScore fs;
+                Vector3 p0 = Input.mousePosition;
+                p0.x /= Screen.width;
+                p0.y /= Screen.height;
+                fsPts = new List<Vector3>();
+                fsPts.Add(p0);
+                fsPts.Add(fsPosMid);
+                fsPts.Add(fsPosRun);
+                fs = ScoreBoard.S.CreateFloatingScore(chain, fsPts);
+                fs.fontSizes = new List<float>(new float[] { 4, 50, 28 });
+                if(fsRun == null)
+                {
+                    fsRun = fs;
+                    fsRun.reportFinishTo = null;
+                }
+                else
+                {
+                    fs.reportFinishTo = fsRun.gameObject;
+                }
+                break;
+        }
+
+        switch (sEvt)
+        {
+            case ScoreEvent.gameWin:
+                GTGameOver.text = "Round Over";
+                print("You won this round! Round score: " + score);
+                GTRoundResult.text = "You won this round! Round score: " + score;
+                ShowResultGTs(true);
+                break;
+            case ScoreEvent.gameLoss:
+                GTGameOver.text = "Game Over";
+                if(Prospector.HIGH_SCORE <= score)
+                {
+                    print("You got the high score! High score: " + score);
+                    string sRR = "You got the high score! High score: " + score;
+                    GTRoundResult.text = sRR;
+                }
+                else
+                {
+                    print("Your final score for the game was: " + score);
+                    GTRoundResult.text = "Your final score for the game was: " + score;
+                }
+                ShowResultGTs(true);
+                break;
+            default:
+                print("Score:" + score + " ScoreRun:" + scoreRun + " Chain:" + chain);
+                break;
         }
     }
 
